@@ -7,6 +7,7 @@ windows) by a feature vector, then score how SIMILAR today's market is. If
 similarity drops, MiMo recommends paper-only.
 """
 from __future__ import annotations
+import os
 import statistics
 
 from app.datasources import fetch_td_ohlc, fetch_td_series, fetch_fred_series
@@ -72,3 +73,44 @@ def regime_similarity():
                                    "validated regime. Recommendation: paper mode only.")
     return {"similarity_pct": similarity, "status": status,
             "recommendation": rec, "features": feats, "detail": detail}
+
+import json as _json
+from datetime import date as _date
+
+_SIM_LOG = os.getenv("SIM_LOG_FILE", "/code/data/regime_similarity.jsonl")
+
+
+def log_similarity_daily():
+    """Append today's similarity once per day (display-only, no decisions)."""
+    res = regime_similarity()
+    sim = res.get("similarity_pct")
+    if sim is None:
+        return res
+    os.makedirs(os.path.dirname(_SIM_LOG), exist_ok=True)
+    today = _date.today().isoformat()
+    if os.path.exists(_SIM_LOG):
+        with open(_SIM_LOG) as f:
+            lines = f.read().strip().splitlines()
+        if lines:
+            try:
+                if _json.loads(lines[-1]).get("date") == today:
+                    return res  # already logged today
+            except Exception:
+                pass
+    with open(_SIM_LOG, "a") as f:
+        f.write(_json.dumps({"date": today, "similarity": sim,
+                             "status": res.get("status")}) + "\n")
+    return res
+
+
+def similarity_history(limit=60):
+    if not os.path.exists(_SIM_LOG):
+        return []
+    rows = []
+    with open(_SIM_LOG) as f:
+        for line in f:
+            try:
+                rows.append(_json.loads(line))
+            except Exception:
+                pass
+    return rows[-limit:]
