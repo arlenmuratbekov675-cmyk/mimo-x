@@ -1,9 +1,9 @@
+data/
+*.db
+.DS_Store
+.env
 __pycache__/
 *.py[cod]
-.env
-*.db
+.pytest_cache/
 *.sqlite3
 .venv/
-venv/
-.pytest_cache/
-.DS_Store

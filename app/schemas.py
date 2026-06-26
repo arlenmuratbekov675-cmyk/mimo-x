@@ -1,29 +1,28 @@
-"""Pydantic response models for the API."""
-from typing import Dict, Literal, Optional
+"""Pydantic response models."""
 from pydantic import BaseModel
-
-BiasStatus = Literal["DATA_NOT_READY", "LONG", "SHORT", "NEUTRAL"]
-Regime = Literal["DATA_NOT_READY", "RISK_ON", "RISK_OFF", "MIXED"]
 
 
 class InstrumentBias(BaseModel):
     symbol: str
-    bias: BiasStatus
-    # Stays None until a backtested, calibrated model exists. Never invented.
-    confidence: Optional[float] = None
-    price: Optional[float] = None
-    change_pct: Optional[float] = None
-    proxy_symbol: Optional[str] = None
+    bias: str                      # LONG | SHORT | NEUTRAL | DATA_NOT_READY
+    confidence: float | None = None  # real % only after backtest; else null
+    price: float | None = None
+    change_pct: float | None = None
+    raw_score: float | None = None
+    proxy_symbol: str | None = None
+    factors: dict | None = None
+    volatility: dict | None = None
     explanation: str
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class BiasResponse(BaseModel):
     data_ready: bool
-    regime: Regime
+    regime: str
     explanation: str
-    sources: Dict[str, str]            # e.g. {"twelvedata": "ok", "fred": "error"}
-    macro: Dict[str, dict] = {}
+    sources: dict
+    macro: dict
+    breadth: dict | None = None
     NQ: InstrumentBias
     ES: InstrumentBias
     GOLD: InstrumentBias

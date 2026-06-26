@@ -1,26 +1,24 @@
-"""MiMo X — entrypoint (Step 4: /health, /bias, /history; versioned under /v1)."""
+"""MiMo X entrypoint - Step 5/6/7: cache, auth, multi-factor bias, backtest."""
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from app.backtest import router as backtest_router
 from app.bias import router as bias_router
 from app.config import settings
 from app.database import Base, engine
+from app.datasources import cache_info
 from app.history import router as history_router
-from app import models  # noqa: F401  (ensure models are registered before create_all)
+from app import models  # noqa: F401
 
-app = FastAPI(title=settings.app_name, version="0.4.0")
+app = FastAPI(title=settings.app_name, version="0.5.0")
 
-# Create tables (now includes bias_snapshots).
 Base.metadata.create_all(bind=engine)
 
-# ByteByteGo best practice: URL-based versioning. Routers mounted at /v1 ...
-app.include_router(bias_router, prefix="/v1", tags=["bias"])
-app.include_router(history_router, prefix="/v1", tags=["history"])
-# ... and also at root for backward compatibility during transition.
-app.include_router(bias_router, tags=["bias"])
-app.include_router(history_router, tags=["history"])
+for r in (bias_router, history_router, backtest_router):
+    app.include_router(r, prefix="/v1")
+    app.include_router(r)
 
 
 @app.get("/health")
@@ -33,15 +31,14 @@ def health():
     except Exception:
         db_ok = False
     return {
-        "status": "ok",
-        "app": settings.app_name,
-        "version": "0.4.0",
-        "environment": settings.environment,
-        "database": "ok" if db_ok else "error",
+        "status": "ok", "app": settings.app_name, "version": "0.5.0",
+        "environment": settings.environment, "database": "ok" if db_ok else "error",
+        "auth": "enabled" if settings.api_key else "disabled",
+        "cache": cache_info(),
         "time": datetime.now(timezone.utc).isoformat(),
     }
 
 
 @app.get("/")
 def root():
-    return {"message": "MiMo X is running. See /health, /bias, /history, /v1/* and /docs."}
+    return {"message": "MiMo X. See /health, /bias, /history, /backtest, /v1/*, /docs."}

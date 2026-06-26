@@ -9,9 +9,20 @@ class Settings(BaseSettings):
     environment: str = "development"
     database_url: str = "sqlite:///./mimo_x.db"
 
-    # API keys (kept on the server, never in the browser). Unused at Step 0.
+    # API keys (kept on the server, never in the browser).
     twelvedata_api_key: str = ""
     fred_api_key: str = ""
+
+    # Step 5: caching to avoid provider rate limits (TwelveData free ~8 req/min).
+    cache_ttl_seconds: int = 300
+
+    # Step 6: optional API auth. If set, callers must send  X-API-Key: <value>.
+    # Empty string = auth disabled (open), so existing setups keep working.
+    api_key: str = ""
+
+    # Step 7: minimum forward-tested samples before confidence becomes a number.
+    backtest_min_samples: int = 30
+    backtest_horizon_hours: int = 24
 
 
 settings = Settings()
