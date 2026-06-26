@@ -13,7 +13,7 @@ from app.datasources import cache_info
 from app.history import router as history_router
 from app import models  # noqa: F401
 
-app = FastAPI(title=settings.app_name, version="0.9.0")
+app = FastAPI(title=settings.app_name, version="0.10.0")
 
 Base.metadata.create_all(bind=engine)
 
@@ -32,7 +32,7 @@ def health():
     except Exception:
         db_ok = False
     return {
-        "status": "ok", "app": settings.app_name, "version": "0.9.0",
+        "status": "ok", "app": settings.app_name, "version": "0.10.0",
         "environment": settings.environment, "database": "ok" if db_ok else "error",
         "auth": "enabled" if settings.api_key else "disabled",
         "cache": cache_info(),
@@ -78,6 +78,13 @@ def execution_paper_test():
             ib.symbol, ib.bias, tp.get("entry"), tp.get("stop"), tp.get("target"))
         out.append({"symbol": ib.symbol, "bias": ib.bias, "result": res})
     return {"executed": out, "status": orc.status()}
+
+
+@app.get("/replay")
+def replay_endpoint(lookback: int = 400):
+    """Walk-forward backtest of the trend+volatility core. Real stats, no money."""
+    from app.replay import run_replay
+    return run_replay(lookback=lookback)
 
 
 @app.get("/calendar")
