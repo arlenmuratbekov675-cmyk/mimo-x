@@ -7,3 +7,4 @@ __pycache__/
 .pytest_cache/
 *.sqlite3
 .venv/
+data/ctrader_token.json

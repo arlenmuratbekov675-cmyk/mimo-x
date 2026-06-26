@@ -13,7 +13,7 @@ from app.datasources import cache_info
 from app.history import router as history_router
 from app import models  # noqa: F401
 
-app = FastAPI(title=settings.app_name, version="0.8.1")
+app = FastAPI(title=settings.app_name, version="0.9.0")
 
 Base.metadata.create_all(bind=engine)
 
@@ -32,7 +32,7 @@ def health():
     except Exception:
         db_ok = False
     return {
-        "status": "ok", "app": settings.app_name, "version": "0.8.1",
+        "status": "ok", "app": settings.app_name, "version": "0.9.0",
         "environment": settings.environment, "database": "ok" if db_ok else "error",
         "auth": "enabled" if settings.api_key else "disabled",
         "cache": cache_info(),
@@ -51,6 +51,33 @@ _DASHBOARD_HTML = "<!DOCTYPE html>\n<html lang=\"ru\"><head><meta charset=\"UTF-
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard():
     return _DASHBOARD_HTML
+
+
+from app.execution.callbacks import router as ctrader_router
+from app.execution.orchestrator import get_orchestrator
+app.include_router(ctrader_router)
+
+
+@app.get("/execution/status")
+def execution_status():
+    return get_orchestrator().status()
+
+
+@app.post("/execution/paper-test")
+def execution_paper_test():
+    """Dry-run: pull current bias and paper-execute each actionable signal."""
+    from app.bias import get_bias
+    data = get_bias()
+    orc = get_orchestrator()
+    out = []
+    for ib in (data.NQ, data.ES, data.GOLD):
+        tp = ib.trade_plan or {}
+        if ib.bias not in ("LONG", "SHORT") or not tp.get("entry"):
+            continue
+        res = orc.execute_signal(
+            ib.symbol, ib.bias, tp.get("entry"), tp.get("stop"), tp.get("target"))
+        out.append({"symbol": ib.symbol, "bias": ib.bias, "result": res})
+    return {"executed": out, "status": orc.status()}
 
 
 @app.get("/calendar")
