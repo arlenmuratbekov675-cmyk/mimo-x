@@ -1,25 +1,30 @@
-"""MiMo X — application entrypoint (Step 1: /health + /bias)."""
+"""MiMo X — entrypoint (Step 4: /health, /bias, /history; versioned under /v1)."""
 from datetime import datetime, timezone
 
 from fastapi import FastAPI
 from sqlalchemy import text
 
+from app.bias import router as bias_router
 from app.config import settings
 from app.database import Base, engine
-from app.bias import router as bias_router
+from app.history import router as history_router
+from app import models  # noqa: F401  (ensure models are registered before create_all)
 
-app = FastAPI(title=settings.app_name, version="0.3.0")
+app = FastAPI(title=settings.app_name, version="0.4.0")
 
-# Create tables on startup (no-op for now — no models yet).
+# Create tables (now includes bias_snapshots).
 Base.metadata.create_all(bind=engine)
 
-# Register routers
+# ByteByteGo best practice: URL-based versioning. Routers mounted at /v1 ...
+app.include_router(bias_router, prefix="/v1", tags=["bias"])
+app.include_router(history_router, prefix="/v1", tags=["history"])
+# ... and also at root for backward compatibility during transition.
 app.include_router(bias_router, tags=["bias"])
+app.include_router(history_router, tags=["history"])
 
 
 @app.get("/health")
 def health():
-    """Liveness + DB connectivity probe."""
     db_ok = False
     try:
         with engine.connect() as conn:
@@ -27,11 +32,10 @@ def health():
         db_ok = True
     except Exception:
         db_ok = False
-
     return {
         "status": "ok",
         "app": settings.app_name,
-        "version": "0.3.0",
+        "version": "0.4.0",
         "environment": settings.environment,
         "database": "ok" if db_ok else "error",
         "time": datetime.now(timezone.utc).isoformat(),
@@ -40,4 +44,4 @@ def health():
 
 @app.get("/")
 def root():
-    return {"message": "MiMo X is running. See /health, /bias and /docs."}
+    return {"message": "MiMo X is running. See /health, /bias, /history, /v1/* and /docs."}

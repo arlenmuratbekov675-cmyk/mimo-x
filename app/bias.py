@@ -1,22 +1,17 @@
-"""Step 3 — /bias endpoint backed by real TwelveData + FRED data.
+"""Step 4 — /bias endpoint (real data) + persists each result as history."""
+import json
 
-Transparent v0 logic:
-- Price bias = sign of daily percent change (threshold +/- 0.1%). No fake confidence.
-- Futures NQ/ES/GOLD use liquid ETF proxies (QQQ/SPY/GLD) on TwelveData free tier;
-  the proxy used is reported in 'proxy_symbol'.
-- Macro from FRED: US 10Y yield (DGS10) and VIX (VIXCLS).
-- Each source reports its own status; a failure in one does not hide the others.
-- No trade execution.
-"""
 from fastapi import APIRouter
 
+from app.database import SessionLocal
 from app.datasources import DataError, fetch_fred_latest, fetch_td_quote
+from app.models import BiasSnapshot
 from app.schemas import BiasResponse, InstrumentBias
 
 router = APIRouter()
 
 PROXY = {"NQ": "QQQ", "ES": "SPY", "GOLD": "GLD"}
-THRESH = 0.1  # percent move treated as directional
+THRESH = 0.1
 FRED_SERIES = {"US10Y": "DGS10", "VIX": "VIXCLS"}
 
 
@@ -42,6 +37,28 @@ def compute_regime(instruments: dict, macro: dict):
     if short_eq and (vix_change is None or vix_change > 0):
         return "RISK_OFF", f"NQ and ES both SHORT.{vix_note}"
     return "MIXED", f"Equity/volatility signals mixed (NQ={nq}, ES={es}).{vix_note}"
+
+
+def _save_snapshot(resp: BiasResponse) -> None:
+    """Persist the computed bias for later backtesting. Best-effort."""
+    try:
+        db = SessionLocal()
+        snap = BiasSnapshot(
+            data_ready=resp.data_ready, regime=resp.regime,
+            nq_bias=resp.NQ.bias, nq_price=resp.NQ.price, nq_change_pct=resp.NQ.change_pct,
+            es_bias=resp.ES.bias, es_price=resp.ES.price, es_change_pct=resp.ES.change_pct,
+            gold_bias=resp.GOLD.bias, gold_price=resp.GOLD.price, gold_change_pct=resp.GOLD.change_pct,
+            payload=json.dumps(resp.model_dump()),
+        )
+        db.add(snap)
+        db.commit()
+    except Exception:
+        pass
+    finally:
+        try:
+            db.close()
+        except Exception:
+            pass
 
 
 @router.get("/bias", response_model=BiasResponse)
@@ -74,10 +91,10 @@ def get_bias() -> BiasResponse:
     fred_ok = True
     for label, sid in FRED_SERIES.items():
         try:
-            f = fetch_fred_latest(sid)
+            ff = fetch_fred_latest(sid)
             macro[label] = {
-                "latest": f["latest"], "prev": f["prev"], "date": f["date"],
-                "change": round(f["latest"] - f["prev"], 4),
+                "latest": ff["latest"], "prev": ff["prev"], "date": ff["date"],
+                "change": round(ff["latest"] - ff["prev"], 4),
             }
         except (DataError, Exception) as e:
             fred_ok = False
@@ -90,7 +107,9 @@ def get_bias() -> BiasResponse:
         f"Sources: TwelveData={sources['twelvedata']}, FRED={sources['fred']}. "
         "Confidence intentionally omitted until a backtested model exists."
     )
-    return BiasResponse(
+    resp = BiasResponse(
         data_ready=td_ok, regime=regime, explanation=explanation,
         sources=sources, macro=macro, **instruments,
     )
+    _save_snapshot(resp)
+    return resp
