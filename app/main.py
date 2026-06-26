@@ -58,6 +58,26 @@ def dashboard():
     return _DASHBOARD_HTML
 
 
+@app.get("/digest/preview")
+def digest_preview_endpoint():
+    """Build the daily digest WITHOUT sending (display-only preview)."""
+    from app.telegram_digest import build_digest
+    return build_digest()
+
+
+@app.post("/digest/send")
+def digest_send_endpoint():
+    """Build and send the daily Telegram digest."""
+    from app.telegram_digest import send_daily_digest
+    return send_daily_digest()
+
+
+@app.get("/research/confidence")
+def research_confidence_endpoint():
+    from app.telegram_digest import build_digest
+    return build_digest().get("research_confidence")
+
+
 @app.get("/regime/history")
 def regime_history_endpoint(limit: int = 60):
     from app.regime_monitor import similarity_history
