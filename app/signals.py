@@ -90,6 +90,15 @@ def macro_score(macro: dict) -> tuple[float, float, dict]:
         if isinstance(lvl, (int, float)) and lvl > 25:
             eq -= 0.25; gold += 0.25
         detail["vix"] = {"latest": lvl, "change": ch}
+    dxy = macro.get("DXY", {})
+    if "error" not in dxy and dxy.get("change") is not None:
+        ch = dxy["change"]
+        # Strong dollar (rising DXY) = headwind for US equities AND gold.
+        if ch > 0:
+            eq -= 0.25; gold -= 0.5
+        elif ch < 0:
+            eq += 0.25; gold += 0.5
+        detail["dxy"] = {"latest": dxy.get("latest"), "change": ch}
     y = macro.get("US10Y", {})
     if "error" not in y and y.get("change") is not None:
         ch = y["change"]
@@ -124,3 +133,139 @@ def aggregate_equity(trend: float, breadth: float, macro_eq: float) -> float:
 def aggregate_gold(trend: float, macro_gold: float) -> float:
     w = GOLD_WEIGHTS
     return round(w["trend"] * trend + w["macro"] * macro_gold, 4)
+
+
+def atr(highs: list[float], lows: list[float], closes: list[float], period: int = 14) -> float | None:
+    """Average True Range over the last `period` bars."""
+    n = min(len(highs), len(lows), len(closes))
+    if n < period + 1:
+        return None
+    trs = []
+    for i in range(n - period, n):
+        if i == 0:
+            continue
+        hl = highs[i] - lows[i]
+        hc = abs(highs[i] - closes[i - 1])
+        lc = abs(lows[i] - closes[i - 1])
+        trs.append(max(hl, hc, lc))
+    if not trs:
+        return None
+    return sum(trs) / len(trs)
+
+
+# Risk model (in ATR multiples).
+STOP_ATR_MULT = 1.5
+RR_TARGET = 2.0  # reward : risk
+
+
+def trade_plan(bias: str, price: float, atr_value: float | None) -> dict | None:
+    """ATR-based entry/stop/target. Only for directional (LONG/SHORT) bias.
+
+    NOTE: levels are on the PROXY ETF scale (QQQ/SPY/GLD), so treat them as a
+    directional/relative reference until a real futures feed is connected.
+    """
+    if bias not in ("LONG", "SHORT") or not atr_value or price is None:
+        return None
+    risk = STOP_ATR_MULT * atr_value
+    reward = RR_TARGET * risk
+    if bias == "LONG":
+        entry, stop, target = price, price - risk, price + reward
+    else:
+        entry, stop, target = price, price + risk, price - reward
+    return {
+        "direction": bias,
+        "entry": round(entry, 4),
+        "stop": round(stop, 4),
+        "target": round(target, 4),
+        "risk_per_unit": round(risk, 4),
+        "reward_per_unit": round(reward, 4),
+        "risk_pct": round(risk / price * 100, 3),
+        "reward_pct": round(reward / price * 100, 3),
+        "rr": RR_TARGET,
+        "atr": round(atr_value, 4),
+        "atr_pct": round(atr_value / price * 100, 3),
+        "basis": "proxy ETF (directional reference; not exact futures levels)",
+    }
+
+
+def signal_quality(raw: float, factors: dict) -> dict:
+    """Grade conviction by factor agreement + raw magnitude.
+
+    Returns {label, score, agree, total, note}.
+    CONFLICTING = factors point in different directions (low trust).
+    """
+    bias = classify(raw)
+    if bias == "NEUTRAL":
+        return {"label": "NEUTRAL", "agree": 0, "total": 0,
+                "note": "No directional edge (raw near zero)."}
+
+    want = 1 if raw > 0 else -1
+    contribs = []
+    t = factors.get("trend", {})
+    if t.get("price_vs_sma20"):
+        contribs.append(("price_vs_sma20", 1 if t["price_vs_sma20"] == "above" else -1))
+    if t.get("sma20_vs_sma50"):
+        contribs.append(("sma20_vs_sma50", 1 if t["sma20_vs_sma50"] == "above" else -1))
+    if "breadth" in factors and factors["breadth"].get("score") is not None:
+        bs = factors["breadth"]["score"]
+        contribs.append(("breadth", 1 if bs > 0 else (-1 if bs < 0 else 0)))
+    macro = factors.get("macro", {})
+    ms = macro.get("equity_score", macro.get("gold_score"))
+    if ms is not None:
+        contribs.append(("macro", 1 if ms > 0 else (-1 if ms < 0 else 0)))
+
+    total = len(contribs)
+    agree = sum(1 for _, d in contribs if d == want)
+    disagree = sum(1 for _, d in contribs if d == -want)
+    mag = abs(raw)
+
+    if total and agree == total and mag >= 0.35:
+        label = "STRONG"
+    elif disagree >= agree:
+        label = "CONFLICTING"
+    elif agree >= disagree and mag >= 0.2:
+        label = "MODERATE"
+    else:
+        label = "WEAK"
+
+    note = f"{agree}/{total} factors agree with {bias}."
+    if label == "CONFLICTING":
+        note += " Factors disagree - treat with caution."
+    return {"label": label, "agree": agree, "total": total,
+            "disagree": disagree, "note": note}
+
+
+# Futures contract specs: $ value per 1.0 point of price move.
+POINT_VALUE = {"NQ": 20.0, "ES": 50.0, "GOLD": 100.0,   # full-size
+               "MNQ": 2.0, "MES": 5.0, "MGC": 10.0}     # micros
+
+
+def position_size(symbol: str, risk_dollars: float, stop_distance_points: float,
+                  proxy: bool = True) -> dict:
+    """How many contracts to risk `risk_dollars` given stop distance.
+
+    When proxy=True, levels are ETF-scale, so we only return the $-risk math
+    and a clear caveat that contract count needs real futures levels.
+    """
+    if not risk_dollars or not stop_distance_points or stop_distance_points <= 0:
+        return {"note": "Need risk_$ and a positive stop distance."}
+    if proxy:
+        return {
+            "risk_dollars": risk_dollars,
+            "note": ("Position size in CONTRACTS requires real futures levels "
+                     "(connect Tradovate). On ETF-proxy scale we can't map to "
+                     "NQ/ES contracts yet."),
+        }
+    pv = POINT_VALUE.get(symbol)
+    if not pv:
+        return {"note": f"No point value for {symbol}."}
+    risk_per_contract = stop_distance_points * pv
+    contracts = int(risk_dollars // risk_per_contract) if risk_per_contract else 0
+    return {
+        "risk_dollars": risk_dollars,
+        "point_value": pv,
+        "stop_points": round(stop_distance_points, 2),
+        "risk_per_contract": round(risk_per_contract, 2),
+        "suggested_contracts": contracts,
+        "actual_risk": round(contracts * risk_per_contract, 2),
+    }

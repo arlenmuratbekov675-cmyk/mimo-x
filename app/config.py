@@ -24,5 +24,17 @@ class Settings(BaseSettings):
     backtest_min_samples: int = 30
     backtest_horizon_hours: int = 24
 
+    # Tradovate (real futures data). Empty = use ETF proxies instead.
+    tradovate_username: str = ""
+    tradovate_password: str = ""
+    tradovate_app_id: str = "MiMoX"
+    tradovate_app_version: str = "1.0"
+    tradovate_cid: str = ""          # client id (from API access request)
+    tradovate_sec: str = ""          # client secret
+    tradovate_demo: bool = True      # demo (sim) vs live endpoint
+    # Which feed to use for instruments: "auto" (tradovate if creds else proxy),
+    # "tradovate", or "proxy".
+    price_feed: str = "auto"
+
 
 settings = Settings()

@@ -6,7 +6,8 @@ from sqlalchemy import select
 
 from app.auth import require_api_key
 from app.database import SessionLocal
-from app.datasources import fetch_fred_latest, fetch_td_series
+from app.datasources import fetch_fred_latest, fetch_td_ohlc, fetch_td_series
+from app import tradovate
 from app.models import BiasSnapshot, Calibration
 from app.schemas import BiasResponse, InstrumentBias
 from app import signals
@@ -14,9 +15,32 @@ from app import signals
 router = APIRouter()
 
 PROXY = {"NQ": "QQQ", "ES": "SPY", "GOLD": "GLD"}
+FUTURES = {"NQ": "NQ", "ES": "ES", "GOLD": "GC"}  # Tradovate root symbols
+
+
+def _use_tradovate() -> bool:
+    from app.config import settings
+    if settings.price_feed == "proxy":
+        return False
+    if settings.price_feed == "tradovate":
+        return True
+    return tradovate.configured()  # auto
+
+
+def get_instrument_ohlc(sym: str):
+    """Return (ohlc_dict, source_label, instrument_name). Prefers real futures."""
+    if _use_tradovate():
+        try:
+            root = FUTURES[sym]
+            hist = tradovate.fetch_history(root, bars=60)
+            return hist, "tradovate", hist.get("contract", root)
+        except Exception:
+            pass  # fall back to proxy below
+    ohlc = fetch_td_ohlc(PROXY[sym], outputsize=60)
+    return ohlc, "proxy", PROXY[sym]
 # Sector ETFs for market breadth (equity participation).
 BREADTH_BASKET = ["XLK", "XLF", "XLV", "XLI"]
-FRED_SERIES = {"US10Y": "DGS10", "VIX": "VIXCLS"}
+FRED_SERIES = {"US10Y": "DGS10", "VIX": "VIXCLS", "DXY": "DTWEXBGS"}
 
 
 def _load_calibration() -> dict:
@@ -100,11 +124,13 @@ def get_bias() -> BiasResponse:
     td_ok = True
     for sym, proxy in PROXY.items():
         try:
-            series = fetch_td_series(proxy, outputsize=60)
+            ohlc, feed_src, instr_name = get_instrument_ohlc(sym)
+            series = ohlc["closes"]
             price = series[-1]
             change_pct = round((series[-1] / series[-2] - 1.0) * 100.0, 4)
             t_score, t_detail = signals.trend_score(series)
             vol, vol_detail = signals.volatility(series)
+            atr_value = signals.atr(ohlc["highs"], ohlc["lows"], series)
             if sym == "GOLD":
                 raw = signals.aggregate_gold(t_score, macro_gold)
                 factors = {"trend": t_detail, "macro": {"gold_score": macro_gold},
@@ -117,10 +143,15 @@ def get_bias() -> BiasResponse:
                            "weights": signals.EQUITY_WEIGHTS}
             bias = signals.classify(raw)
             conf = _confidence_for(sym, raw, calib)
+            plan = signals.trade_plan(bias, price, atr_value)
+            squality = signals.signal_quality(raw, factors)
             instruments[sym] = InstrumentBias(
                 symbol=sym, bias=bias, confidence=conf,
                 price=price, change_pct=change_pct,
-                raw_score=raw, proxy_symbol=proxy, factors=factors,
+                raw_score=raw, atr=round(atr_value, 4) if atr_value else None,
+                atr_pct=round(atr_value / price * 100, 3) if atr_value else None,
+                trade_plan=plan, signal_quality=squality,
+                proxy_symbol=instr_name, factors=factors,
                 volatility=vol_detail,
                 explanation=(
                     f"{sym} via {proxy}: raw_score={raw:+.3f} -> {bias}. "
@@ -139,6 +170,7 @@ def get_bias() -> BiasResponse:
                 proxy_symbol=proxy,
                 explanation=f"Data fetch failed for {proxy}.", error=str(e))
     sources["twelvedata"] = "ok" if td_ok else "error"
+    sources["price_feed"] = "tradovate" if _use_tradovate() else "proxy"
 
     # --- regime ---
     nq, es = instruments["NQ"].bias, instruments["ES"].bias
@@ -157,9 +189,26 @@ def get_bias() -> BiasResponse:
         f"breadth={sources['breadth']}. "
         "Confidence is measured (backtest), not invented."
     )
+    # Warnings (Apex rules: no hedging, correlation awareness).
+    warnings = []
+    nq_b, es_b = instruments["NQ"].bias, instruments["ES"].bias
+    if nq_b in ("LONG", "SHORT") and es_b in ("LONG", "SHORT") and nq_b != es_b:
+        warnings.append(
+            "NQ and ES point OPPOSITE directions but are highly correlated. "
+            "Taking both = de-facto hedge (PROHIBITED on Apex). Pick one.")
+    elif nq_b == es_b and nq_b in ("LONG", "SHORT"):
+        warnings.append(
+            f"NQ and ES are correlated and both {nq_b}. Trading both doubles the "
+            "same risk - size accordingly, don't treat as diversified.")
+    for s in ("NQ", "ES", "GOLD"):
+        sq = instruments[s].signal_quality or {}
+        if sq.get("label") == "CONFLICTING":
+            warnings.append(f"{s}: factors conflict - low-conviction signal, consider skipping.")
+    warnings.append("Reminder: close all positions before market close (Apex rule).")
+
     resp = BiasResponse(
         data_ready=td_ok, regime=regime, explanation=explanation,
-        sources=sources, macro=macro,
+        sources=sources, macro=macro, warnings=warnings,
         breadth={"score": round(b_score, 3), **breadth_detail}, **instruments,
     )
     _save_snapshot(resp)

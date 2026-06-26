@@ -90,6 +90,41 @@ def fetch_td_series(symbol: str, outputsize: int = 60, interval: str = "1day") -
     return closes
 
 
+def fetch_td_ohlc(symbol: str, outputsize: int = 60, interval: str = "1day") -> dict:
+    """OHLC arrays (oldest..newest) for a symbol from TwelveData (cached).
+
+    Returns {"closes": [...], "highs": [...], "lows": [...]}.
+    """
+    ck = f"td_ohlc:{symbol}:{interval}:{outputsize}"
+    hit = _cache_get(ck)
+    if hit is not None:
+        return hit
+    key = settings.twelvedata_api_key
+    if not key:
+        raise DataError("no TwelveData key configured")
+    r = requests.get(
+        f"{TD_BASE}/time_series",
+        params={"symbol": symbol, "interval": interval, "outputsize": outputsize, "apikey": key},
+        timeout=15,
+    )
+    r.raise_for_status()
+    d = r.json()
+    if isinstance(d, dict) and d.get("status") == "error":
+        raise DataError(d.get("message", "TwelveData error"))
+    values = d.get("values")
+    if not values:
+        raise DataError(f"no time_series for {symbol}: {str(d)[:120]}")
+    vals = list(reversed(values))  # oldest..newest
+    closes = [float(v["close"]) for v in vals if v.get("close") not in (None, "")]
+    highs = [float(v["high"]) for v in vals if v.get("high") not in (None, "")]
+    lows = [float(v["low"]) for v in vals if v.get("low") not in (None, "")]
+    if len(closes) < 2:
+        raise DataError(f"insufficient series for {symbol}")
+    out = {"closes": closes, "highs": highs, "lows": lows}
+    _cache_set(ck, out)
+    return out
+
+
 def fetch_fred_latest(series_id: str) -> dict:
     """Latest two observations for a FRED series (cached)."""
     ck = f"fred:{series_id}"

@@ -9,6 +9,10 @@ class InstrumentBias(BaseModel):
     price: float | None = None
     change_pct: float | None = None
     raw_score: float | None = None
+    atr: float | None = None
+    atr_pct: float | None = None
+    trade_plan: dict | None = None
+    signal_quality: dict | None = None
     proxy_symbol: str | None = None
     factors: dict | None = None
     volatility: dict | None = None
@@ -23,6 +27,7 @@ class BiasResponse(BaseModel):
     sources: dict
     macro: dict
     breadth: dict | None = None
+    warnings: list | None = None
     NQ: InstrumentBias
     ES: InstrumentBias
     GOLD: InstrumentBias
