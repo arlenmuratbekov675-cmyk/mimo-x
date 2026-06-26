@@ -8,6 +8,7 @@ from app.auth import require_api_key
 from app.database import SessionLocal
 from app.datasources import fetch_fred_latest, fetch_td_ohlc, fetch_td_series
 from app import tradovate
+from app import calendar as econ_calendar
 from app.models import BiasSnapshot, Calibration
 from app.schemas import BiasResponse, InstrumentBias
 from app import signals
@@ -206,9 +207,26 @@ def get_bias() -> BiasResponse:
             warnings.append(f"{s}: factors conflict - low-conviction signal, consider skipping.")
     warnings.append("Reminder: close all positions before market close (Apex rule).")
 
+    # Economic calendar awareness - warn in the window right before a release.
+    cal = econ_calendar.upcoming_events(days_ahead=3)
+    imminent = cal.get("imminent") or []
+    if imminent:
+        parts = []
+        for e in imminent:
+            m = e.get("minutes_until")
+            when = ("in " + str(m) + " min") if m and m > 0 else "NOW / just released"
+            parts.append(e["event"] + " (" + when + ")")
+        warnings.insert(0, "NEWS WINDOW: " + "; ".join(parts) +
+                        " - do not open new trades around the release (Apex: no gambling on news).")
+    elif cal.get("has_event_today"):
+        todays = [e["event"] + " @ " + e.get("time_local", "?")
+                  for e in cal["events"] if e["date"] == __import__("datetime").date.today().isoformat()]
+        warnings.append("High-impact news later today: " + ", ".join(todays) +
+                        " - plan around it.")
+
     resp = BiasResponse(
         data_ready=td_ok, regime=regime, explanation=explanation,
-        sources=sources, macro=macro, warnings=warnings,
+        sources=sources, macro=macro, warnings=warnings, calendar=cal,
         breadth={"score": round(b_score, 3), **breadth_detail}, **instruments,
     )
     _save_snapshot(resp)

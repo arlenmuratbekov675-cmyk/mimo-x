@@ -28,6 +28,7 @@ class BiasResponse(BaseModel):
     macro: dict
     breadth: dict | None = None
     warnings: list | None = None
+    calendar: dict | None = None
     NQ: InstrumentBias
     ES: InstrumentBias
     GOLD: InstrumentBias
