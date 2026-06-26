@@ -80,6 +80,38 @@ def execution_paper_test():
     return {"executed": out, "status": orc.status()}
 
 
+@app.get("/regime")
+def regime_endpoint():
+    from app.regime_monitor import regime_similarity
+    return regime_similarity()
+
+
+@app.get("/forward/collect")
+def forward_collect_endpoint(dry_run: bool = False):
+    from app.forward_paper import collect
+    return collect(dry_run=dry_run)
+
+
+@app.get("/forward/stats")
+def forward_stats_endpoint():
+    from app.forward_paper import stats
+    return stats()
+
+
+@app.get("/replay/walkforward")
+def replay_wf_endpoint(lookback: int = 1000, test_size: int = 100, step: int = 50):
+    """Rolling walk-forward of candidate_regime_v1 across market eras."""
+    from app.replay import run_walkforward
+    return run_walkforward(lookback=lookback, test_size=test_size, step=step)
+
+
+@app.get("/replay/split")
+def replay_split_endpoint(lookback: int = 400):
+    """Out-of-sample split test of the FROZEN regime-aware rule."""
+    from app.replay import run_split
+    return run_split(lookback=lookback)
+
+
 @app.get("/replay")
 def replay_endpoint(lookback: int = 400):
     """Walk-forward backtest of the trend+volatility core. Real stats, no money."""

@@ -150,3 +150,34 @@ def fetch_fred_latest(series_id: str) -> dict:
     out = {"latest": latest, "prev": prev, "date": obs[0]["date"]}
     _cache_set(ck, out)
     return out
+
+
+def fetch_fred_series(series_id: str, limit: int = 600) -> dict:
+    """Historical observations for a FRED series (oldest..newest), date-indexed.
+
+    Returns {"dates": [...], "values": [...]} aligned, missing points dropped.
+    """
+    ck = f"fred_hist:{series_id}:{limit}"
+    hit = _cache_get(ck)
+    if hit is not None:
+        return hit
+    key = settings.fred_api_key
+    if not key:
+        raise DataError("no FRED key configured")
+    r = requests.get(
+        f"{FRED_BASE}/series/observations",
+        params={"series_id": series_id, "api_key": key, "file_type": "json",
+                "sort_order": "desc", "limit": limit},
+        timeout=15,
+    )
+    r.raise_for_status()
+    d = r.json()
+    obs = [o for o in d.get("observations", []) if o.get("value") not in (".", "")]
+    if not obs:
+        raise DataError(f"no observations for {series_id}")
+    obs = list(reversed(obs))  # oldest..newest
+    dates = [o["date"] for o in obs]
+    values = [float(o["value"]) for o in obs]
+    out = {"dates": dates, "values": values}
+    _cache_set(ck, out)
+    return out
