@@ -1,3 +1,6 @@
+# \uD83D\uDEAB DO NOT IMPLEMENT ANY ROADMAP ITEM UNTIL DECISION GATE IS PASSED.
+# ("MessageBus doesn't change strategy" / "let's quickly add Nautilus" = NO. Frozen.)
+
 # MiMo X — Roadmap (POST-experiment only)
 
 > DO NOTHING here until >=100-200 forward paper trades are collected.
